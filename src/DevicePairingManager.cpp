@@ -10,6 +10,8 @@
 #include <pthread.h>
 #include <exception>
 #include <functional>
+#include <mutex>
+#include <set>
 
 #include "ServerError.hpp"
 
@@ -301,6 +303,51 @@ namespace
 		return data;
 	}
 
+	// Marks a pairing with one device as running, for as long as the object lives. tunnel_pair_usb()
+	// returns only when the user answers the Trust prompt, the device disconnects or the connection
+	// fails, and idevice has no call that cancels it. So a retry while the prompt is still up would
+	// start a second pairing with the same device and block one more request thread and 8 MiB stack.
+	// A second request for the same UDID fails at once instead.
+	class PairingInProgress
+	{
+	public:
+		PairingInProgress(std::string udid) : udid(udid)
+		{
+			std::lock_guard<std::mutex> lock(mutex());
+			if (!udids().insert(udid).second)
+			{
+				throw PairingError(ServerErrorCode::Unknown,
+					"AltServer is already pairing with this device.",
+					"Tap Trust or Don't Trust on your device, or disconnect it, then try again.",
+					NULL);
+			}
+		}
+
+		~PairingInProgress()
+		{
+			std::lock_guard<std::mutex> lock(mutex());
+			udids().erase(udid);
+		}
+
+		PairingInProgress(const PairingInProgress&) = delete;
+		PairingInProgress& operator=(const PairingInProgress&) = delete;
+
+	private:
+		std::string udid;
+
+		static std::mutex& mutex()
+		{
+			static std::mutex mutex;
+			return mutex;
+		}
+
+		static std::set<std::string>& udids()
+		{
+			static std::set<std::string> udids;
+			return udids;
+		}
+	};
+
 	// Runs work on a new thread with an 8 MiB stack and returns its result or rethrows its exception.
 	// tunnel_pair_usb() polls idevice's pairing future on the calling thread, and that poll needs more
 	// than the 128 KiB that musl gives threads by default, including cpprestsdk's thread pool threads.
@@ -359,5 +406,6 @@ DevicePairingManager* DevicePairingManager::instance()
 
 std::vector<unsigned char> DevicePairingManager::GeneratePairingFile(std::string udid, std::string hostName)
 {
+	PairingInProgress pairing(udid);
 	return RunOnLargeStack([udid, hostName]() { return PairAndSerialize(udid, hostName); });
 }
