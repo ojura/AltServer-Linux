@@ -10,19 +10,28 @@
 ROOT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 include $(ROOT_DIR)/../main.mak
 
+# A failed ld or objcopy must not leave a partial idevice_ffi.o that the next make treats as built.
+.DELETE_ON_ERROR:
+
 IDEVICE_FEATURES := $(shell cat $(ROOT_DIR)/idevice-features.txt)
 IDEVICE_TARGET_DIR := $(BUILD_DIR)/idevice-target
 IDEVICE_FFI_LIB ?= $(IDEVICE_TARGET_DIR)/release/libidevice_ffi.a
 
 idevice_api := $(ROOT_DIR)/idevice-api.txt
 
-$(IDEVICE_TARGET_DIR)/release/libidevice_ffi.a:
+# cargo runs on every make, because only cargo knows when the library is out of date: a submodule
+# bump, a change to idevice-features.txt or a new toolchain. When nothing changed it leaves the
+# library untouched, and make then does not prelink it again.
+$(IDEVICE_TARGET_DIR)/release/libidevice_ffi.a: FORCE
 	cd $(LIB_DIR)/idevice/ffi && cargo build --release --locked --target-dir $(IDEVICE_TARGET_DIR) --no-default-features --features $(IDEVICE_FEATURES)
 
 $(BUILD_DIR)/idevice_ffi.o: $(IDEVICE_FFI_LIB) $(idevice_api)
 	ld -r $(addprefix -u ,$(shell cat $(idevice_api))) -o $@.tmp $(IDEVICE_FFI_LIB)
 	objcopy --keep-global-symbols=$(idevice_api) $@.tmp $@
 	rm -f $@.tmp
+
+FORCE:
+.PHONY : FORCE
 
 clean::
 	rm -f $(BUILD_DIR)/idevice_ffi.o
