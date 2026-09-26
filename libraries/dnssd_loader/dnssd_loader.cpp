@@ -22,7 +22,11 @@ DNSServiceErrorType DNSSD_API DNSServiceRegister
     void                                *context       /* may be NULL */
     ) {
         // python3 -c 'from ctypes import *; sdRef = c_int(); CDLL('libdns_sd.so').DNSServiceRegister(byref(sdRef), flags, interfaceIndex, name, regtype, domain, host, txtLen, txtRecord, None, None)'
-        std::string pyCommand = "from ctypes import *; dll = CDLL('libdns_sd.so'); ";
+        // Distributions ship the versioned libdns_sd.so.1 in the runtime package (Debian/Ubuntu:
+        // libavahi-compat-libdnssd1); the unversioned libdns_sd.so symlink only comes with the -dev package.
+        std::string pyCommand = "from ctypes import *\n"
+            "try: dll = CDLL('libdns_sd.so.1')\n"
+            "except OSError: dll = CDLL('libdns_sd.so')\n";
 
         pyCommand += "sdRef = c_int(); ";
 #define INT_ARG(argname) (std::string("") + #argname " = " + std::to_string(argname) + "; ")
