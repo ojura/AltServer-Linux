@@ -249,6 +249,65 @@ if NAME == 'ServerError.hpp':
         b'is NTP-synchronised - its timestamp is sent to Apple verbatim.";')
 
 
+if NAME == 'ClientConnection.cpp':
+    # PairingFileRequest: AltStore Classic 2.3's "Set up Remote AltServer" asks AltServer for a
+    # RemotePairing (RPPairing) file. AltStore stores it and from then on installs and refreshes
+    # apps on the device itself over LocalDevVPN, with no AltServer involved. Upstream's dispatch
+    # has no branch for it, so the request fell through to ServerErrorCode::UnknownRequest and
+    # AltStore reported "unable to pair". AltServer for macOS answers it in RequestHandler.swift;
+    # the pairing itself is src/DevicePairingManager.cpp. The response carries the file base64
+    # encoded, which is how AltStore's JSONDecoder decodes Data.
+    content = replace_exact(
+        content,
+        b'#include "AltServerApp.h"\r\n',
+        b'#include "AltServerApp.h"\r\n#include "DevicePairingManager.h"\r\n')
+    content = replace_exact(
+        content,
+        b'            return this->ProcessEnableUnsignedCodeExecutionRequest(request);\r\n'
+        b'        }\r\n',
+        b'            return this->ProcessEnableUnsignedCodeExecutionRequest(request);\r\n'
+        b'        }\r\n'
+        b'        else if (identifier == "PairingFileRequest")\r\n'
+        b'        {\r\n'
+        b'            return this->ProcessPairingFileRequest(request);\r\n'
+        b'        }\r\n')
+    content = replace_exact(
+        content,
+        b'web::json::value ClientConnection::ErrorResponse(std::exception& exception)',
+        br'''pplx::task<void> ClientConnection::ProcessPairingFileRequest(web::json::value request)
+{
+	std::string udid = StringFromWideString(request[U("udid")].as_string());
+
+	return pplx::create_task([this, udid]() {
+		// The device lists the pairing under this name in Settings > General > VPN & Device Management.
+		char hostname[256] = {0};
+		gethostname(hostname, sizeof(hostname) - 1);
+		std::string hostName = std::string("AltServer on ") + (strlen(hostname) > 0 ? hostname : "Linux");
+
+		auto pairingFile = DevicePairingManager::instance()->GeneratePairingFile(udid, hostName);
+
+		// Byte count only: the file holds the private key of this host's pairing with the device.
+		std::cout << "Generated pairing file for device " << udid << " (" << pairingFile.size() << " bytes)." << std::endl;
+
+		auto response = json::value::object();
+		response[U("version")] = json::value::number(1);
+		response[U("identifier")] = json::value::string(U("PairingFileResponse"));
+		response[U("pairingFile")] = json::value::string(utility::conversions::to_base64(pairingFile));
+		return this->SendResponse(response);
+	});
+}
+
+web::json::value ClientConnection::ErrorResponse(std::exception& exception)''')
+
+
+if NAME == 'ClientConnection.h':
+    content = replace_exact(
+        content,
+        b'    pplx::task<void> ProcessEnableUnsignedCodeExecutionRequest(web::json::value request);\r\n',
+        b'    pplx::task<void> ProcessEnableUnsignedCodeExecutionRequest(web::json::value request);\r\n'
+        b'    pplx::task<void> ProcessPairingFileRequest(web::json::value request);\r\n')
+
+
 # --- Post-conditions on the output -----------------------------------------------------------
 # Only for C/C++ text. The directory also holds .ico, .aps, .png and .rc, where these byte
 # sequences could occur by coincidence and mean nothing.

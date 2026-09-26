@@ -198,10 +198,11 @@ jobs:
       - name: Pick architectures
         id: pick
         run: |
-          AMD64='{"arch":"amd64","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_amd64"}'
-          AARCH64='{"arch":"aarch64","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_aarch64"}'
-          ARMV7='{"arch":"armv7","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_armv7"}'
-          I386='{"arch":"i386","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_i386"}'
+          # rust_target is the musl target idevice is cross-compiled for (see "Build idevice").
+          AMD64='{"arch":"amd64","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_amd64","rust_target":"x86_64-unknown-linux-musl"}'
+          AARCH64='{"arch":"aarch64","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_aarch64","rust_target":"aarch64-unknown-linux-musl"}'
+          ARMV7='{"arch":"armv7","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_armv7","rust_target":"armv7-unknown-linux-musleabihf"}'
+          I386='{"arch":"i386","builder":"ghcr.io/ben-diehlci/altserver_builder_alpine_i386","rust_target":"i686-unknown-linux-musl"}'
 
           if [[ "${{ github.ref }}" == refs/tags/* ]] \
              || [[ "${{ github.event_name }}" == "schedule" ]] \
@@ -248,11 +249,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare build
         run: mkdir /tmp/build_output
+      # The builder images have no Rust toolchain, and rustup publishes musl-hosted compilers only
+      # for x86_64 and aarch64. So idevice (src/DevicePairingManager.cpp) is cross-compiled here on
+      # the runner with cargo-zigbuild and handed to make as IDEVICE_FFI_LIB, which skips the
+      # Makefile's own cargo step. It also runs natively instead of under QEMU.
+      - name: Build idevice
+        run: |
+          lib=$(makefiles/idevice-build/build-idevice-cross.sh ${{ matrix.rust_target }})
+          echo "IDEVICE_FFI_LIB=/workdir/${lib#$PWD/}" >> "$GITHUB_ENV"
       - name: Build
         run: |
           image=${{ matrix.builder }}
           docker pull $image
-          docker run -v ${PWD}:/workdir -w /workdir $image bash -c 'mkdir build; cd build; make -f ../Makefile -j3'
+          docker run -v ${PWD}:/workdir -w /workdir $image bash -c "mkdir build; cd build; make -f ../Makefile -j3 IDEVICE_FFI_LIB=$IDEVICE_FFI_LIB"
           cp build/AltServer-* /tmp/build_output; chmod +x /tmp/build_output/*
           sudo rm -rf build
           git clean -fdX

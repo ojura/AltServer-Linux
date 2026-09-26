@@ -15,3 +15,6 @@
 [submodule "libraries/libimobiledevice-glue"]
 	path = libraries/libimobiledevice-glue
 	url = https://github.com/libimobiledevice/libimobiledevice-glue
+[submodule "libraries/idevice"]
+	path = libraries/idevice
+	url = https://github.com/jkcoxson/idevice

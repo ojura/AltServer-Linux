@@ -319,6 +319,29 @@ AltStore refreshes itself: it sets an hourly background-fetch interval and runs 
 `BackgroundRefreshAppsOperation`. iOS grants that at its own discretion, so if an app ever expires
 unexpectedly, that is why - not the server.
 
+#### Remote AltServer (AltStore Classic 2.3 and later)
+
+AltStore Classic 2.3 can install and refresh apps with no AltServer at all: **Settings > Set up
+Remote AltServer...** asks AltServer once for a RemotePairing file, and from then on AltStore uses
+it on the phone itself over LocalDevVPN, with anisette data from public servers. AltServer answers
+that request (`PairingFileRequest`) in `src/DevicePairingManager.cpp`, a port of AltServer for
+macOS's `DevicePairingManager.swift` built on [idevice](https://github.com/jkcoxson/idevice). The
+phone shows a Trust prompt and lists the pairing as "AltServer on <hostname>" under Settings >
+General > VPN & Device Management.
+
+AltStore sends the request **only over the wired connection**, so AltServer has to see the phone
+on USB. The compose stack above cannot do that: AltServer reaches the phone only through netmuxd,
+which runs with `--disable-usb`. For the one-time setup, plug the phone in and run the static
+binary on the host with `USBMUXD_SOCKET_ADDRESS` unset, so it uses the host's usbmuxd:
+
+```bash
+ALTSERVER_ANISETTE_SERVER=http://127.0.0.1:6969 ./AltServer-x86_64
+```
+
+Tap **Set up Remote AltServer...**, confirm Trust on the phone, then stop it. With **Prefer Remote
+AltServer** on (setup turns it on), AltStore no longer contacts AltServer; with it off, AltStore
+uses AltServer as before.
+
 ### 7. Don't lose it
 
 ```bash
@@ -809,12 +832,16 @@ tag is worth avoiding rather than merely fixing.
 - Preparation: `git clone --recursive <this repo>`
 
 - Easiest, using the same prebuilt toolchain CI uses (it already has corecrypto, cpprestsdk, boost
-  and libzip):
+  and libzip). It has no Rust toolchain, so idevice is built first, with cargo-zigbuild in a
+  container, and handed to make; the script prints the path of the library it built:
   ```
+  lib=$(makefiles/idevice-build/build-idevice-cross.sh x86_64-unknown-linux-musl)
   docker run --rm -v "$PWD":/workdir -w /workdir \
     ghcr.io/ben-diehlci/altserver_builder_alpine_amd64 \
-    bash -c 'mkdir -p build; cd build; make -f ../Makefile -j"$(nproc)"'
+    bash -c "mkdir -p build; cd build; make -f ../Makefile -j\"\$(nproc)\" IDEVICE_FFI_LIB=/workdir/${lib#$PWD/}"
   ```
+  Other architectures use `aarch64-unknown-linux-musl`, `armv7-unknown-linux-musleabihf` or
+  `i686-unknown-linux-musl` with the matching builder image.
   Or build the container image directly - note the `-f`, because the Dockerfile is not at the
   repo root and the build context must still be the root:
 
@@ -822,7 +849,9 @@ tag is worth avoiding rather than merely fixing.
   docker build -f docker/Dockerfile -t altserver .
   ```
 
-- By hand (note the `cd build` - the Makefile builds into the *current* directory):
+- By hand (note the `cd build` - the Makefile builds into the *current* directory). Without
+  `IDEVICE_FFI_LIB` the Makefile builds idevice itself, so this also needs cargo (tested with Rust
+  1.93 and 1.98):
   ```
   cd AltServer-Linux
   mkdir build
@@ -848,7 +877,7 @@ that is quietly missing a transformation:
 
 | Rewriter | How it fails loudly |
 |---|---|
-| `makefiles/rewrite_altserver_source.py` | Match counts on the AltServerApp.cpp substitutions, plus post-conditions on the output |
+| `makefiles/rewrite_altserver_source.py` | Match counts on the AltServerApp.cpp and ClientConnection substitutions, plus post-conditions on the output |
 | `makefiles/AltSign-build/rewrite_altsign_source.py` | Match assertions |
 | `makefiles/AltSign-build/rewrite_ldid_source.py` | Match assertions |
 | `makefiles/libimobiledevice-build/rewrite_idevice_source.py` | Match assertions |
@@ -860,6 +889,12 @@ and legitimately match zero times in most, so a count would be meaningless; they
 post-conditions on the output instead (no `L"..."` literal, no `boost::filesystem`, no bare
 `std::wstring` may survive). That is stronger than counting, because it also catches an occurrence
 arriving in a form the pattern was never written to handle.
+
+idevice (`libraries/idevice`, for Remote AltServer setup) is Rust, and its static library also
+defines libplist-compatible `plist_*` functions and the Rust standard library. Linked as is, those
+would clash with the vendored libplist. `makefiles/idevice-build/idevice.mak` therefore prelinks it
+into one object with `ld -r` and keeps only the functions listed in `idevice-api.txt` global
+(`objcopy --keep-global-symbols`); everything else becomes local to that object.
 
 ### Building the buildenv image
 

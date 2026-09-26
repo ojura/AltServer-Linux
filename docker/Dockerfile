@@ -20,17 +20,49 @@
 # ---------------------------------------------------------------------------------------------
 ARG BUILDER=ghcr.io/ben-diehlci/altserver_builder_alpine_amd64
 
+# ---------------------------------------------------------------------------------------------
+# idevice stage - the Rust library behind src/DevicePairingManager.cpp (Remote AltServer setup).
+# The builder images have no Rust toolchain, so this builds it for TARGETARCH with cargo-zigbuild;
+# zig supplies the C compiler and musl headers for ring's C and assembly. The build stage
+# prelinks the result. The cargo build also generates the C header,
+# libraries/idevice/ffi/idevice.h, which the build stage copies from here because the build
+# context does not contain it. No --platform=$BUILDPLATFORM: the legacy builder does not define
+# BUILDPLATFORM and rejects the empty value, and every documented build is native anyway.
+# ---------------------------------------------------------------------------------------------
+FROM ghcr.io/rust-cross/cargo-zigbuild:0.23.4 AS idevice
+ARG TARGETARCH
+WORKDIR /src
+COPY libraries/idevice /src/libraries/idevice
+COPY makefiles/idevice-build/idevice-features.txt /src/makefiles/idevice-build/idevice-features.txt
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) target=x86_64-unknown-linux-musl ;; \
+      arm64) target=aarch64-unknown-linux-musl ;; \
+      arm) target=armv7-unknown-linux-musleabihf ;; \
+      386) target=i686-unknown-linux-musl ;; \
+      *) echo "no Rust target for TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    rustup target add "$target"; \
+    cd libraries/idevice/ffi; \
+    cargo zigbuild --release --locked --target "$target" --target-dir /idevice-target \
+      --no-default-features --features "$(cat /src/makefiles/idevice-build/idevice-features.txt)"; \
+    mkdir -p /out; \
+    cp "/idevice-target/$target/release/libidevice_ffi.a" /out/libidevice_ffi.a; \
+    cp idevice.h /out/idevice.h
+
 FROM ${BUILDER} AS build
 
 WORKDIR /src
 COPY . /src
+COPY --from=idevice /out/libidevice_ffi.a /idevice/libidevice_ffi.a
+COPY --from=idevice /out/idevice.h /src/libraries/idevice/ffi/idevice.h
 
 # The binary is named for the gcc triple (AltServer-x86_64, AltServer-aarch64, ...), so normalise
 # it to a single known path for the runtime stage to copy.
 RUN set -eux; \
     rm -rf build; mkdir -p build /out; \
     cd build; \
-    make -f ../Makefile -j"$(nproc)"; \
+    make -f ../Makefile -j"$(nproc)" IDEVICE_FFI_LIB=/idevice/libidevice_ffi.a; \
     cp AltServer-* /out/AltServer; \
     chmod +x /out/AltServer; \
     ls -la /out/AltServer

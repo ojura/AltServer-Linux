@@ -59,10 +59,20 @@ lib_dnssd_loader_clean :
 	$(MAKE) -f $(ROOT_DIR)/makefiles/dnssd_loader-build/dnssd_loader.mak clean
 .PHONY: $(BUILD_DIR)/dnssd_loader.a lib_dnssd_loader lib_dnssd_loader_clean
 
+# idevice's C API for src/DevicePairingManager.cpp. See makefiles/idevice-build/idevice.mak for
+# why it is one prelinked object rather than the static library cargo produces.
+$(BUILD_DIR)/idevice_ffi.o:
+	$(MAKE) -f $(ROOT_DIR)/makefiles/idevice-build/idevice.mak
+lib_idevice : $(BUILD_DIR)/idevice_ffi.o
+lib_idevice_clean :
+	$(MAKE) -f $(ROOT_DIR)/makefiles/idevice-build/idevice.mak clean
+.PHONY: $(BUILD_DIR)/idevice_ffi.o lib_idevice lib_idevice_clean
+
 
 include $(ROOT_DIR)/makefiles/libimobiledevice-build/libimobiledevice-files.mak
 include $(ROOT_DIR)/makefiles/AltSign-build/AltSign-files.mak
 include $(ROOT_DIR)/makefiles/dnssd_loader-build/dnssd_loader-files.mak
+include $(ROOT_DIR)/makefiles/idevice-build/idevice-files.mak
 
 #libimobiledevice_include := -I$(LIB_DIR)/libimobiledevice/include -I$(LIB_DIR)/libimobiledevice -I$(LIB_DIR)/libusbmuxd/include
 #libplist_include := -I$(LIB_DIR)/libplist/include
@@ -73,6 +83,7 @@ INC_CFLAGS += $(libimobiledevice_include)
 INC_CFLAGS += $(libplist_include)
 INC_CFLAGS += $(altsign_include)
 INC_CFLAGS += $(dnssd_loader_include)
+INC_CFLAGS += $(idevice_include)
 
 include $(ROOT_DIR)/makefiles/AltWindowsShim.mak
 
@@ -136,17 +147,17 @@ main_newsrc := $(main_orisrc:$(main_srcroot)/%=$(main_patched_root)/%)
 
 main_objs = $(main_newsrc:$(BUILD_DIR)/%=$(BUILD_DIR)/objs/%.o) $(main_override_src:$(ROOT_DIR)/%=$(BUILD_DIR)/objs/%.o) $(shim_src:$(MAIN_DIR)/%=$(BUILD_DIR)/objs/%.o)
 
-$(main_objs) : lib_AltSign lib_libimobiledevice lib_dnssd_loader
+$(main_objs) : lib_AltSign lib_libimobiledevice lib_dnssd_loader lib_idevice
 
 $(main_objs) : EXTRA_FLAGS := -I$(main_patched_root) -I$(ROOT_DIR)/src -fpermissive -include "common.h" $(INC_CFLAGS)
 
 LDFLAGS = -static -lssl -lcrypto -lpthread -lcorecrypto_static -lzip -lm -lz -lcpprest -lboost_system -lboost_filesystem -lstdc++ -lssl -lcrypto -luuid
 
-$(BUILD_DIR)/$(PROGRAM):: $(main_objs) $(BUILD_DIR)/libimobiledevice.a $(BUILD_DIR)/AltSign.a $(BUILD_DIR)/libplist.a $(BUILD_DIR)/dnssd_loader.a
+$(BUILD_DIR)/$(PROGRAM):: $(main_objs) $(BUILD_DIR)/libimobiledevice.a $(BUILD_DIR)/AltSign.a $(BUILD_DIR)/libplist.a $(BUILD_DIR)/dnssd_loader.a $(BUILD_DIR)/idevice_ffi.o
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 .PHONY: clean all
-clean:: lib_libimobiledevice_clean lib_AltSign_clean lib_dnssd_loader_clean
+clean:: lib_libimobiledevice_clean lib_AltSign_clean lib_dnssd_loader_clean lib_idevice_clean
 	rm -f $(main_objs) $(BUILD_DIR)/$(PROGRAM)
 	# The PATCHED tree, not just the objects. Leaving it behind meant `make clean && make`
 	# rebuilt every object from the stale rewritten sources, so a clean build was not clean.

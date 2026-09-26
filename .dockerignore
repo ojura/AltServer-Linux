@@ -6,3 +6,6 @@ build/
 __pycache__/
 *.pyc
 docs/
+# Local cargo output from makefiles/idevice-build; the image builds idevice in its own stage.
+libraries/idevice/target/
+libraries/idevice/target-*/
