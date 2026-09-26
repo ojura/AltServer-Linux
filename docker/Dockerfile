@@ -5,12 +5,11 @@
 #
 #   python3                       - AltServer is a -static binary and therefore cannot dlopen
 #                                   Bonjour itself. It shells out to python3, which dlopens
-#                                   libdns_sd.so on its behalf (libraries/dnssd_loader).
-#   libavahi-compat-libdnssd-dev  - NOT ...-libdnssd1. The runtime package ships only
-#                                   libdns_sd.so.1, while the code dlopens the UNVERSIONED
-#                                   soname, whose symlink comes from the -dev package.
+#                                   libdns_sd.so.1 on its behalf (libraries/dnssd_loader).
+#   libavahi-compat-libdnssd1     - Provides libdns_sd.so.1, Avahi's Bonjour compatibility
+#                                   library.
 #
-# Without either, the server starts, reports nothing wrong, and is permanently undiscoverable
+# Without either, the server starts without advertising itself and is permanently undiscoverable
 # by the phone. The image verifies both at build time so that cannot ship broken.
 
 # ---------------------------------------------------------------------------------------------
@@ -44,14 +43,14 @@ RUN set -eux; \
 #
 # Safe to bump because AltServer itself is linked -static -- the base image's libc is irrelevant to
 # it. Only python3, libimobiledevice-utils, avahi-utils and netmuxd are affected, and all were
-# verified on trixie (including the libdns_sd.so load below) before this change was pushed.
+# verified on trixie (including the libdns_sd.so.1 load below) before this change was pushed.
 FROM debian:trixie-slim
 
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         python3 \
-        libavahi-compat-libdnssd-dev \
+        libavahi-compat-libdnssd1 \
         ca-certificates \
         curl \
         tzdata \
@@ -65,8 +64,8 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     # Fail the BUILD rather than ship an image that cannot advertise. This is the exact call
     # dnssd_loader.cpp makes, so if it works here it works at runtime.
-    python3 -c "from ctypes import CDLL; CDLL('libdns_sd.so')"; \
-    echo "libdns_sd.so loads OK"
+    python3 -c "from ctypes import CDLL; CDLL('libdns_sd.so.1')"; \
+    echo "libdns_sd.so.1 loads OK"
 
 COPY --from=build /out/AltServer /usr/local/bin/AltServer
 

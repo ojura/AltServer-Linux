@@ -58,7 +58,13 @@ regtype = regtype.encode() or None
 domain = domain.encode() or None
 host = host.encode() or None
 
-dll = CDLL('libdns_sd.so')
+# The versioned soname first: it is what the runtime package ships (libavahi-compat-libdnssd1 on
+# Debian/Ubuntu). The unversioned libdns_sd.so symlink exists only where the -dev package is
+# installed, so loading that alone made the -dev package a runtime requirement.
+try:
+    dll = CDLL('libdns_sd.so.1')
+except OSError:
+    dll = CDLL('libdns_sd.so')
 # Declared explicitly. sdRef is a DNSServiceRef, which is a POINTER: the previous version passed a
 # 4-byte c_int, so on any 64-bit build the daemon wrote 8 bytes into 4 and the stored handle was
 # truncated. Harmless only while nobody used the handle; this file now deallocates it.
@@ -287,10 +293,9 @@ DNSServiceErrorType DNSSD_API DNSServiceRegister
                     "       immediately. AltStore on your device will NOT be able to discover this\n"
                     "       server, and refreshing will never happen.\n"
                     "       Verify with the same call this program makes:\n"
-                    "           python3 -c \"from ctypes import CDLL; CDLL('libdns_sd.so')\"\n"
-                    "       On Debian/Ubuntu install libavahi-compat-libdnssd-dev -- the -dev package is\n"
-                    "       the one providing the unversioned libdns_sd.so symlink, not libdnssd1 -- and\n"
-                    "       make sure avahi-daemon is running.\n");
+                    "           python3 -c \"from ctypes import CDLL; CDLL('libdns_sd.so.1')\"\n"
+                    "       On Debian/Ubuntu install libavahi-compat-libdnssd1, which provides\n"
+                    "       libdns_sd.so.1, and make sure avahi-daemon is running.\n");
 
                 return kDNSServiceErr_Unknown;
             }

@@ -642,8 +642,8 @@ def check_advertisement(service="_altserver._tcp"):
     return _result("mDNS advertisement", FAIL, "%s is NOT published" % service,
                    "avahi answered and nothing is advertising it, so AltStore cannot discover "
                    "this server.",
-                   "Check python3 and libavahi-compat-libdnssd-DEV (not -libdnssd1: the code "
-                   "dlopens the unversioned libdns_sd.so) and that avahi-daemon is running.")
+                   "Check python3 and libavahi-compat-libdnssd1 (it provides libdns_sd.so.1, "
+                   "which the code dlopens) and that avahi-daemon is running.")
 
 
 def _shares_host_pids():

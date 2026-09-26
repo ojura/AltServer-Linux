@@ -562,16 +562,16 @@ Bundled in the container image. Needed on the host if you run the binary directl
 | Requirement | Why | If missing |
 |---|---|---|
 | `python3` | The binary is `-static` and cannot dlopen Bonjour, so it shells out to python3 | Advertisement fails |
-| `libavahi-compat-libdnssd-dev` | Provides the **unversioned** `libdns_sd.so` the code dlopens | Advertisement fails |
+| `libavahi-compat-libdnssd1` | Provides `libdns_sd.so.1`, the Bonjour compatibility library the code dlopens | Advertisement fails |
 | `avahi-daemon` running | Performs the actual mDNS publishing | Advertisement fails |
 | `avahi-utils` | Provides `avahi-browse`, the only way to check an advertisement from outside | **The self-heal watchdog silently turns itself OFF**, and the status checks report UNKNOWN |
 | `usbmuxd` for cabled pairing; **`netmuxd` for Wi-Fi** | Device access | No device found |
 | An anisette server | Apple machine identity | Sign-in fails |
 | Accurate clock **on the anisette host** | Its timestamp is forwarded to Apple verbatim | Opaque `-36607` |
 
-Note the **`-dev`** package, not `libavahi-compat-libdnssd1`: the runtime package ships only
-`libdns_sd.so.1`, while the code dlopens the unversioned name. This is the single most common way
-to end up with a server that runs, reports nothing wrong, and is invisible to your phone.
+The code dlopens `libdns_sd.so.1` and falls back to the unversioned `libdns_sd.so`, so either the
+runtime package or `libavahi-compat-libdnssd-dev` works. Without the library, the server runs
+without advertising itself and prints an ERROR at startup; it is then invisible to your phone.
 
 ---
 
