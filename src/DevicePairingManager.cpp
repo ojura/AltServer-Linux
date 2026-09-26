@@ -3,8 +3,10 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <stdlib.h>
 #include <string.h>
 #include <netdb.h>
+#include <sys/socket.h>
 #include <pthread.h>
 #include <exception>
 #include <functional>
@@ -63,63 +65,151 @@ namespace
 			ffiError);
 	}
 
-	// Resolves the usbmuxd address the same way idevice_usbmuxd_new_default_connection() does
-	// (USBMUXD_SOCKET_ADDRESS, then the default socket), so the device lookup and the pairing
-	// connection go through the same usbmuxd. The macOS version always uses the default socket.
-	UsbmuxdAddrHandle* CreateUsbmuxdAddress()
+	// Where usbmuxd listens. The rest of AltServer reaches usbmuxd through libusbmuxd, so this reads
+	// USBMUXD_SOCKET_ADDRESS by libusbmuxd's rules and pairing uses the same usbmuxd:
+	//   UNIX:<path>                        the unix socket at <path>
+	//   <host>:<port> or [<host>]:<port>   TCP, where <host> may be a name
+	//   unset, or any other value          the default socket, /var/run/usbmuxd
+	// idevice's own reader (idevice_usbmuxd_new_default_connection) takes every value that contains a
+	// ':' as a numeric TCP address, so it rejects UNIX:<path>. The macOS version always uses the
+	// default socket.
+	struct UsbmuxdLocation
 	{
-		UsbmuxdAddrHandle* address = NULL;
-		IdeviceFfiError* error = NULL;
+		std::string socketPath; // Empty for TCP.
+		sockaddr_storage tcpAddress = {};
+		socklen_t tcpAddressLength = 0;
+		std::string description;
+	};
 
-		const char* socketAddress = getenv("USBMUXD_SOCKET_ADDRESS");
-		if (socketAddress == NULL)
+	UsbmuxdLocation ReadUsbmuxdLocation()
+	{
+		UsbmuxdLocation location;
+		location.socketPath = "/var/run/usbmuxd";
+		location.description = location.socketPath;
+
+		const char* value = getenv("USBMUXD_SOCKET_ADDRESS");
+		if (value == NULL)
 		{
-			error = idevice_usbmuxd_default_addr_new(&address);
+			return location;
 		}
-		else if (strchr(socketAddress, ':') == NULL)
+
+		std::string address = value;
+		if (address.compare(0, 5, "UNIX:") == 0)
 		{
-			error = idevice_usbmuxd_unix_addr_new(socketAddress, &address);
+			if (address.size() > 5)
+			{
+				location.socketPath = address.substr(5);
+				location.description = location.socketPath;
+			}
+			return location;
+		}
+
+		auto separator = address.rfind(':');
+		if (separator == std::string::npos)
+		{
+			return location;
+		}
+
+		// Like libusbmuxd: the whole text after the last ':' must be a port from 1 to 65535.
+		std::string port = address.substr(separator + 1);
+		char* portEnd = NULL;
+		long portNumber = strtol(port.c_str(), &portEnd, 10);
+		if (*portEnd != '\0' || portNumber < 1 || portNumber > 65535)
+		{
+			return location;
+		}
+
+		std::string host = address.substr(0, separator);
+		if (!host.empty() && host.front() == '[')
+		{
+			host = host.substr(1);
+			auto bracket = host.rfind(']');
+			if (bracket != std::string::npos)
+			{
+				host = host.substr(0, bracket);
+			}
+		}
+
+		if (host.empty())
+		{
+			return location;
+		}
+
+		struct addrinfo hints = {};
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_STREAM;
+
+		struct addrinfo* result = NULL;
+		int status = getaddrinfo(host.c_str(), std::to_string(portNumber).c_str(), &hints, &result);
+		if (status != 0 || result == NULL)
+		{
+			throw UnknownPairingError("Couldn't resolve USBMUXD_SOCKET_ADDRESS " + address + ": " + gai_strerror(status));
+		}
+
+		memcpy(&location.tcpAddress, result->ai_addr, result->ai_addrlen);
+		location.tcpAddressLength = result->ai_addrlen;
+		freeaddrinfo(result);
+
+		location.socketPath.clear();
+		location.description = address;
+		return location;
+	}
+
+	UsbmuxdConnectionHandle* ConnectToUsbmuxd(const UsbmuxdLocation& location)
+	{
+		UsbmuxdConnectionHandle* connection = NULL;
+		IdeviceFfiError* error = NULL;
+		if (location.socketPath.empty())
+		{
+			error = idevice_usbmuxd_new_tcp_connection((const idevice_sockaddr*)&location.tcpAddress, location.tcpAddressLength, 0, &connection);
 		}
 		else
 		{
-			// host:port, or [host]:port for IPv6.
-			std::string value = socketAddress;
-			auto separator = value.rfind(':');
-			std::string host = value.substr(0, separator);
-			std::string port = value.substr(separator + 1);
-			if (host.size() >= 2 && host.front() == '[' && host.back() == ']')
-			{
-				host = host.substr(1, host.size() - 2);
-			}
-
-			struct addrinfo hints = {};
-			hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
-			hints.ai_socktype = SOCK_STREAM;
-
-			struct addrinfo* result = NULL;
-			if (getaddrinfo(host.c_str(), port.c_str(), &hints, &result) != 0 || result == NULL)
-			{
-				throw UnknownPairingError("Invalid USBMUXD_SOCKET_ADDRESS: " + value);
-			}
-
-			error = idevice_usbmuxd_tcp_addr_new(result->ai_addr, result->ai_addrlen, &address);
-			freeaddrinfo(result);
+			error = idevice_usbmuxd_new_unix_socket_connection(location.socketPath.c_str(), 0, &connection);
 		}
 
 		if (error != NULL)
 		{
-			throw UnknownPairingError("Couldn't create usbmuxd address.", error);
+			throw UnknownPairingError("Couldn't connect to usbmuxd at " + location.description + ".", error);
+		}
+
+		return connection;
+	}
+
+	UsbmuxdAddrHandle* CreateUsbmuxdAddress(const UsbmuxdLocation& location)
+	{
+		UsbmuxdAddrHandle* address = NULL;
+		IdeviceFfiError* error = NULL;
+		if (location.socketPath.empty())
+		{
+			error = idevice_usbmuxd_tcp_addr_new((const idevice_sockaddr*)&location.tcpAddress, location.tcpAddressLength, &address);
+		}
+		else
+		{
+			error = idevice_usbmuxd_unix_addr_new(location.socketPath.c_str(), &address);
+		}
+
+		if (error != NULL)
+		{
+			throw UnknownPairingError("Couldn't create usbmuxd address for " + location.description + ".", error);
 		}
 
 		return address;
 	}
 
-	// Finds the usbmuxd device_id for this UDID.
-	uint32_t ResolveDeviceID(std::string udid, UsbmuxdConnectionHandle* muxConnection)
+	// The value idevice_usbmuxd_device_get_connection_type() returns for a USB connection. It is
+	// idevice's UsbmuxdConnectionType::Usb, which idevice.h does not declare.
+	const uint8_t UsbmuxdConnectionTypeUSB = 1;
+
+	// Finds the usbmuxd device_id of this UDID's USB connection. usbmuxd also lists a device that it
+	// reaches over the network, under the same UDID, and pairing must not use that entry.
+	uint32_t ResolveDeviceID(std::string udid, const UsbmuxdLocation& location)
 	{
+		std::unique_ptr<UsbmuxdConnectionHandle, decltype(&idevice_usbmuxd_connection_free)> muxConnection(ConnectToUsbmuxd(location), idevice_usbmuxd_connection_free);
+
 		UsbmuxdDeviceHandle** devices = NULL;
 		int deviceCount = 0;
-		if (auto error = idevice_usbmuxd_get_devices(muxConnection, &devices, &deviceCount))
+		if (auto error = idevice_usbmuxd_get_devices(muxConnection.get(), &devices, &deviceCount))
 		{
 			throw UnknownPairingError("Couldn't query connected devices.", error);
 		}
@@ -127,6 +217,11 @@ namespace
 		std::optional<uint32_t> deviceID;
 		for (int i = 0; i < deviceCount; i++)
 		{
+			if (idevice_usbmuxd_device_get_connection_type(devices[i]) != UsbmuxdConnectionTypeUSB)
+			{
+				continue;
+			}
+
 			char* deviceUDID = idevice_usbmuxd_device_get_udid(devices[i]);
 			if (deviceUDID == NULL)
 			{
@@ -161,18 +256,12 @@ namespace
 
 	std::vector<unsigned char> PairAndSerialize(std::string udid, std::string hostName)
 	{
-		// 1. Connect to usbmuxd and resolve the device_id (required by idevice) for this UDID.
-		UsbmuxdConnectionHandle* muxConnection = NULL;
-		if (auto error = idevice_usbmuxd_new_default_connection(0, &muxConnection))
-		{
-			throw UnknownPairingError("Couldn't connect to usbmuxd.", error);
-		}
-		std::unique_ptr<UsbmuxdConnectionHandle, decltype(&idevice_usbmuxd_connection_free)> muxConnectionOwner(muxConnection, idevice_usbmuxd_connection_free);
+		// 1. Resolve the device_id (required by idevice) of this UDID's USB connection.
+		UsbmuxdLocation location = ReadUsbmuxdLocation();
+		uint32_t deviceID = ResolveDeviceID(udid, location);
 
-		uint32_t deviceID = ResolveDeviceID(udid, muxConnection);
-
-		// 2. Build a device provider. usbmuxd_provider_new() takes ownership of the address only when it succeeds.
-		UsbmuxdAddrHandle* address = CreateUsbmuxdAddress();
+		// 2. Build a device provider for the same usbmuxd. usbmuxd_provider_new() takes ownership of the address only when it succeeds.
+		UsbmuxdAddrHandle* address = CreateUsbmuxdAddress(location);
 
 		IdeviceProviderHandle* provider = NULL;
 		if (auto error = usbmuxd_provider_new(address, 0, udid.c_str(), deviceID, hostName.c_str(), &provider))
