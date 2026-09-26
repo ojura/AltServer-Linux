@@ -121,8 +121,10 @@ the request.
   throws `UnknownRequest`, and the Linux build replaces it with `src/DevicePairingManager.cpp`.
 - `src/DevicePairingManager.cpp` is a C++ port of `DevicePairingManager.swift`: it looks up the
   device by UDID in usbmuxd, calls `tunnel_pair_usb()` (the device shows a Trust prompt for
-  "AltServer on <hostname>") and serializes the pairing file. It uses `USBMUXD_SOCKET_ADDRESS` for
-  both the device lookup and the pairing connection, like the rest of AltServer-Linux. The pairing
+  "AltServer on <hostname>") and serializes the pairing file. It reads `USBMUXD_SOCKET_ADDRESS` by
+  libusbmuxd's rules (`UNIX:<path>`, `<host>:<port>`, otherwise `/var/run/usbmuxd`), so the device
+  lookup and the pairing connection use the same usbmuxd as the rest of AltServer-Linux. It pairs
+  only over the device's USB connection, not a network entry for the same UDID. The pairing
   runs on its own thread with an 8 MiB stack: `tunnel_pair_usb()` polls idevice's pairing future on
   the calling thread, and that overflows the 128 KiB stack musl gives cpprestsdk's pool threads.
 - `libraries/idevice` is [idevice](https://github.com/jkcoxson/idevice) v0.1.68, built with the
