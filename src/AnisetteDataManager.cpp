@@ -141,7 +141,7 @@ std::shared_ptr<AnisetteData> AnisetteDataManager::FetchAnisetteData()
 
 				struct tm tm = { 0 };
 				strptime(jsonVal.at("X-Apple-I-Client-Time").as_string().c_str(), "%Y-%m-%dT%H:%M:%SZ", &tm);
-				unsigned long ts = mktime(&tm);
+				unsigned long ts = timegm(&tm); // X-Apple-I-Client-Time is UTC; mktime() would read it as local time
 				struct timeval tv = { 0 };
 				tv.tv_sec = ts;
 				tv.tv_usec = 0;
