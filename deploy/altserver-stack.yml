@@ -300,7 +300,7 @@ services:
       # USBMUXD_SOCKET_ADDRESS. Harmless while that variable is set: libusbmuxd never looks here.
       - /var/run/usbmuxd:/var/run/usbmuxd
 
-      # mDNS. The image ships python3 + libavahi-compat-libdnssd-dev, but the actual publishing is
+      # mDNS. The image ships python3 + libavahi-compat-libdnssd1, but the actual publishing is
       # done by the HOST's avahi-daemon, reached over these sockets. Without them the server runs,
       # reports success, and is silently undiscoverable.
       - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
